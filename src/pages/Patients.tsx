@@ -24,9 +24,10 @@ export default function Patients() {
           {filtered.map((patient) => (
             <li key={patient.name} className="card" role="listitem"><div className="card-row">
               <div className="product-thumb" aria-hidden>🏥</div>
-              <div className="card-info"><span className="card-name">{patient.name}</span><span className="card-meta">{patient.entryCount} entries</span></div>
+              <div className="card-info"><span className="card-name">{patient.name}</span><span className="card-meta">{patient.entryCount} {patient.entryCount === 1 ? "entry" : "entries"}</span></div>
               <div className="card-right"><span style={{ fontWeight: 600 }}>${patient.totalCost.toFixed(2)}</span></div>
             </div></li>))}
-        </ul>)}    </div>
+        </ul>)}
+    </div>
   );
 }

@@ -18,7 +18,7 @@ export default function Summary() {
       {vendors.length > 0 && (<section><h2 className="section-title">Vendors ({vendors.length})</h2>
         <ul className="card-list" role="list">{vendors.slice(0, 5).map((v) => (
           <li key={v.name} className="card card-compact" role="listitem"><div className="card-row">
-            <div className="card-info"><span className="card-name">{v.name}</span><span className="card-meta">{v.entryCount} entries</span></div>
+            <div className="card-info"><span className="card-name">{v.name}</span><span className="card-meta">{v.entryCount} {v.entryCount === 1 ? "entry" : "entries"}</span></div>
             <div className="card-right"><span style={{ fontWeight: 600 }}>${v.totalCost.toFixed(2)}</span></div>
           </div></li>))}</ul></section>)}
       {entries.length > 0 && (<section><h2 className="section-title">Recent Entries</h2>

@@ -19,7 +19,7 @@ export default function PriceSheets() {
                 <div className="card-row">
                   <div className="card-info">
                     <span className="card-name">{p.product_name}</span>
-                    <span className="card-meta">{p.item_number} · {p.vendors.join(", ")} · {p.entryCount} uses</span>
+                    <span className="card-meta">{p.item_number} · {p.vendors.join(", ")} · {p.entryCount} {p.entryCount === 1 ? "use" : "uses"}</span>
                   </div>
                   <div className="card-right">
                     <span style={{ fontWeight: 600 }}>${p.totalCost.toFixed(2)}</span>

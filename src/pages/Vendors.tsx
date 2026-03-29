@@ -15,7 +15,7 @@ export default function Vendors() {
           {vendors.map((vendor) => (
             <li key={vendor.name} className="card" role="listitem"><div className="card-row">
               <div className="product-thumb" aria-hidden>🏢</div>
-              <div className="card-info"><span className="card-name">{vendor.name}</span><span className="card-meta">{vendor.entryCount} entries</span></div>
+              <div className="card-info"><span className="card-name">{vendor.name}</span><span className="card-meta">{vendor.entryCount} {vendor.entryCount === 1 ? "entry" : "entries"}</span></div>
               <div className="card-right"><span style={{ fontWeight: 600 }}>${vendor.totalCost.toFixed(2)}</span></div>
             </div></li>))}
         </ul>)}

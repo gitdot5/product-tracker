@@ -38,7 +38,7 @@ export default function Products() {
                 <div className="product-thumb" aria-hidden>📦</div>
                 <div className="card-info">
                   <span className="card-name">{product.product_name}</span>
-                  <span className="card-meta">{product.item_number} · {product.entryCount} entries</span>
+                  <span className="card-meta">{product.item_number} · {product.entryCount} {product.entryCount === 1 ? "entry" : "entries"}</span>
                 </div>
                 <div className="card-right">
                   <span style={{ fontWeight: 600 }}>${product.totalCost.toFixed(2)}</span>
