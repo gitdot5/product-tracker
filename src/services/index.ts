@@ -1,0 +1,1 @@
+export { entryService } from "./entry.service";
