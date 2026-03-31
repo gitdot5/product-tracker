@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import type { Result } from "@zxing/library";
 
@@ -12,50 +12,68 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
   const controlsRef = useRef<{ stop: () => void } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const stopScanning = useCallback(() => {
-    controlsRef.current?.stop();
-    controlsRef.current = null;
-  }, []);
-
-  const handleResult = useCallback((result: Result | undefined) => {
-    if (result) {
-      const text = result.getText();
-      if (text) { stopScanning(); onScan(text); }
-    }
-  }, [onScan, stopScanning]);
-
   useEffect(() => {
     const reader = new BrowserMultiFormatReader();
-    const startScanning = async () => {      try {
+    let cancelled = false;
+    function handleResult(result: Result | undefined) {
+      if (!result) return;
+      const text = result.getText();
+      if (text) {
+        controlsRef.current?.stop();
+        controlsRef.current = null;
+        onScan(text);
+      }
+    }
+
+    async function start() {
+      try {
         const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter((d) => d.kind === "videoinput");
-        if (videoDevices.length === 0) { setError("No camera found on this device."); return; }
-        const backCamera = videoDevices.find((d: MediaDeviceInfo) =>
-          d.label.toLowerCase().includes("back") || d.label.toLowerCase().includes("rear") || d.label.toLowerCase().includes("environment"));
-        const deviceId = backCamera?.deviceId ?? videoDevices[0].deviceId;
-        if (!videoRef.current) return;
-        const controls = await reader.decodeFromVideoDevice(deviceId, videoRef.current, handleResult);
+        const cameras = devices.filter((d) => d.kind === "videoinput");
+
+        if (cameras.length === 0) {
+          setError("No camera found on this device.");
+          return;
+        }
+
+        const back = cameras.find((d) => {
+          const label = d.label.toLowerCase();
+          return label.includes("back") || label.includes("rear") || label.includes("environment");
+        });
+        if (cancelled || !videoRef.current) return;
+
+        const controls = await reader.decodeFromVideoDevice(
+          back?.deviceId ?? cameras[0].deviceId,
+          videoRef.current,
+          handleResult,
+        );
         controlsRef.current = controls;
       } catch (err) {
-        const message = err instanceof DOMException && err.name === "NotAllowedError"
-          ? "Camera permission denied. Please allow camera access in Settings."
-          : "Failed to start camera. Please try again.";
-        setError(message);
-        console.error("[BarcodeScanner]", err);
+        if (err instanceof DOMException && err.name === "NotAllowedError") {
+          setError("Camera permission denied. Please allow camera access in Settings.");
+        } else {
+          setError("Failed to start camera. Please try again.");
+        }
       }
-    };
-    startScanning();
-    return () => { stopScanning(); };
-  }, [handleResult, stopScanning]);
+    }
 
+    start();
+
+    return () => {
+      cancelled = true;
+      controlsRef.current?.stop();
+      controlsRef.current = null;
+    };
+  }, [onScan]);
   return (
     <div className="scanner-overlay">
       <div className="scanner-container">
         <div className="scanner-header">
           <span>Scan Barcode</span>
-          <button className="scanner-close" onClick={onClose} aria-label="Close scanner">✕</button>
+          <button className="scanner-close" onClick={onClose}>✕</button>
         </div>
-        <div className="scanner-viewfinder">          {error ? (
+
+        <div className="scanner-viewfinder">
+          {error ? (
             <div className="scanner-error">
               <p>{error}</p>
               <button className="btn btn-primary" onClick={onClose}>Close</button>
@@ -63,10 +81,11 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
           ) : (
             <>
               <video ref={videoRef} className="scanner-video" playsInline autoPlay muted />
-              <div className="scanner-reticle" aria-hidden />
+              <div className="scanner-reticle" />
             </>
           )}
         </div>
+
         <p className="scanner-hint">Point camera at a barcode to scan</p>
       </div>
     </div>

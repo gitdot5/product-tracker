@@ -12,24 +12,18 @@ export interface Entry {
 }
 
 export type EntryInsert = Omit<Entry, "id" | "created_at">;
-export type EntryUpdate = Partial<Omit<Entry, "id" | "created_at">>;
 
-export interface VendorSummary {
+export interface GroupSummary {
   name: string;
-  entryCount: number;
-  totalCost: number;
-}
-
-export interface PatientSummary {
-  name: string;
-  entryCount: number;
-  totalCost: number;
+  count: number;
+  total: number;
 }
 
 export interface ProductSummary {
   product_name: string;
-  item_number: string;  entryCount: number;
-  totalCost: number;
+  item_number: string;
+  count: number;
+  total: number;
   vendors: string[];
 }
 
