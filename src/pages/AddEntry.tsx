@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { useForm, type SubmitHandler } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useNavigate } from "react-router-dom";
 import { useEntryStore } from "@/store/useEntryStore";
 import { useUIStore } from "@/store/useUIStore";
+import { BarcodeScanner } from "@/components/BarcodeScanner";
 import { ROUTES } from "@/lib/constants";
 
 const entrySchema = z.object({
@@ -23,9 +25,12 @@ export default function AddEntry() {
   const navigate = useNavigate();
   const add = useEntryStore((s) => s.add);
   const showToast = useUIStore((s) => s.showToast);
+  const [scanning, setScanning] = useState(false);
+
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<EntryFormData>({
     resolver: zodResolver(entrySchema) as any,
@@ -35,6 +40,12 @@ export default function AddEntry() {
       patient: "",
     },
   });
+
+  function handleScan(value: string) {
+    setValue("item_number", value, { shouldValidate: true });
+    setScanning(false);
+    showToast("success", `Scanned: ${value}`);
+  }
 
   const onSubmit: SubmitHandler<EntryFormData> = async (data) => {
     try {
@@ -52,6 +63,14 @@ export default function AddEntry() {
       <header className="page-header">
         <h1 className="page-title">Add Entry</h1>
       </header>
+
+      {scanning && (
+        <BarcodeScanner
+          onScan={handleScan}
+          onClose={() => setScanning(false)}
+        />
+      )}
+
       <form onSubmit={handleSubmit(onSubmit)} noValidate>
         <div className="form-row">
           <div className="form-group">
@@ -88,12 +107,17 @@ export default function AddEntry() {
           </div>
           <div className="form-group">
             <label className="form-label" htmlFor="item_number">Item Number *</label>
-            <input
-              id="item_number"
-              className={`input ${errors.item_number ? "input-error" : ""}`}
-              placeholder="e.g. AF-2X3-001"
-              {...register("item_number")}
-            />
+            <div className="input-with-action">
+              <input
+                id="item_number"
+                className={`input ${errors.item_number ? "input-error" : ""}`}
+                placeholder="e.g. AF-2X3-001"
+                {...register("item_number")}
+              />
+              <button type="button" className="btn-scan" onClick={() => setScanning(true)}>
+                Scan
+              </button>
+            </div>
             {errors.item_number && <p className="form-error">{errors.item_number.message}</p>}
           </div>
         </div>

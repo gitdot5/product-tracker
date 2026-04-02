@@ -27,7 +27,8 @@ body {
   line-height: 1.5;
   color: var(--text);
   background: var(--bg);
-  overflow-x: hidden;  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
 }
 
 ul, ol { list-style: none; }
@@ -86,6 +87,7 @@ input, select, textarea { font: inherit; color: inherit; border: none; backgroun
 .chip-bar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 12px; -webkit-overflow-scrolling: touch; }
 .chip { font-size: 13px; font-weight: 500; padding: 6px 14px; border-radius: 999px; white-space: nowrap; background: var(--bg-input); color: var(--text-muted); border: 1px solid transparent; transition: all 0.15s; }
 .chip.active { background: var(--primary); color: #fff; }
+
 .input { width: 100%; padding: 12px 14px; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 15px; color: var(--text); transition: border-color 0.15s; }
 .input:focus { outline: none; border-color: var(--primary); }
 .input-error { border-color: var(--danger); }
@@ -108,6 +110,7 @@ select.input {
 .btn-primary { background: var(--primary); color: #fff; }
 .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
 .btn-danger { background: rgba(248, 113, 113, 0.15); color: var(--danger); }
+.btn-sm { padding: 6px 12px; font-size: 13px; }
 .btn-block { width: 100%; }
 
 .empty-state { text-align: center; padding: 48px 16px; color: var(--text-muted); }
@@ -136,6 +139,7 @@ select.input {
 .toast-message { flex: 1; font-size: 14px; }
 .toast-close { font-size: 18px; opacity: 0.5; padding: 4px; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+
 .scanner-overlay { position: fixed; inset: 0; z-index: 300; background: rgba(0, 0, 0, 0.9); display: flex; align-items: center; justify-content: center; padding: 16px; }
 .scanner-container { width: 100%; max-width: 400px; }
 .scanner-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; font-weight: 600; font-size: 16px; }
@@ -146,3 +150,45 @@ select.input {
 @keyframes pulse-reticle { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 .scanner-error { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 16px; padding: 24px; text-align: center; color: var(--text-muted); }
 .scanner-hint { text-align: center; font-size: 13px; color: var(--text-muted); margin-top: 12px; }
+
+.card-delete {
+  margin-top: 8px;
+  align-self: flex-end;
+  font-size: 14px;
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  opacity: 0.5;
+  transition: opacity 0.15s, color 0.15s;
+}
+.card-delete:hover { opacity: 1; color: var(--danger); }
+
+.delete-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.delete-confirm-text { font-size: 13px; color: var(--text-muted); }
+.delete-confirm-actions { display: flex; gap: 8px; }
+
+.input-with-action {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.input-with-action .input { flex: 1; }
+.btn-scan {
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--primary);
+  white-space: nowrap;
+  transition: border-color 0.15s;
+}
+.btn-scan:hover { border-color: var(--primary); }
