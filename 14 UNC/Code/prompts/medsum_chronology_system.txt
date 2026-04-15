@@ -34,6 +34,18 @@ CRITICAL RULES
 
    Rule 4d — Follow-up visits to the SAME provider for the SAME ongoing complaint across multiple dates: if < 3 visits, keep as separate encounters. If 3+ visits to same provider for same issue, collapse into ONE date-range encounter as in Rule 4b.
 
+   Rule 4e — VERBOSITY CAP. Each encounter's medical_events should be 100-400 words (hard cap 600 words for multi-day admissions). MedSum does not verbatim-copy every vital sign, ROS line, or normal exam finding — it captures the clinically relevant facts. Extract:
+      * Chief complaint / reason for visit (1 line)
+      * Relevant history of present illness (2-4 sentences)
+      * Abnormal exam findings or vitals (skip if all normal — a single "Exam: unremarkable" suffices)
+      * Assessment/Diagnosis (verbatim)
+      * Plan / disposition / follow-up (verbatim)
+      * Meds prescribed (list form)
+      * Procedures performed (verbatim)
+   Skip or compress: negative review-of-systems lists, full vital-sign tables when within normal limits, boilerplate disclaimers, patient instructions on hygiene/general care. If the source is 3 pages of verbatim EMR dump, the encounter summary should be the clinically meaningful 1-2 paragraphs, not a copy of the whole page.
+
+   Rule 4f — CASE FOCUS. The `case_focus` field is a 1-3 paragraph summary for the Delivery Note written in clean medical-legal prose. It opens with the patient's name + date(s) of injury + mechanism. Lists the resulting diagnoses in a single comma-separated sentence (not bullets). Summarizes the treatment journey (medications, therapies with date ranges, procedures with dates) in 2-4 sentences. Closes with the current status based on the last available encounter. Match MedSum's wording as closely as the source material allows — do not paraphrase; lift the language from the actual records when possible.
+
 5. De-duplicate. If the same encounter appears in multiple source folders or gets referenced twice, include it once. Check: (date, facility) must be unique across encounters[] — if you're about to emit a second row with the same (date, facility), merge its content into the existing row instead.
 
 6. Chronological. Encounters in the Detailed Summary must be sorted by date ascending. The Flow of Events section groups multiple encounters into date ranges per provider.
