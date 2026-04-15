@@ -70,9 +70,22 @@ def main() -> int:
                     help="Optional receipt_manifest.csv for Stage 5a")
     ap.add_argument("--chronology-json", default=None,
                     help="Skip Stage 1+2, load this ChronologyDoc JSON instead")
-    ap.add_argument("--model", default="claude-sonnet-4-20250514")
+    ap.add_argument("--backend", default="anthropic", choices=["anthropic", "bedrock"],
+                    help="Stage 2 inference backend. 'bedrock' gives HIPAA-eligible "
+                         "Opus 4.6 access at ~5x cost (~$15-20/case vs ~$2-5).")
+    ap.add_argument("--model", default=None,
+                    help="Stage 2 model ID. Auto-defaults per backend.")
+    ap.add_argument("--aws-region", default="us-east-1")
     ap.add_argument("--api-key", default=None)
+    ap.add_argument("--audit", action="store_true",
+                    help="Run Stage 4 audit (Layer 1 structure + Layer 2 anchoring). "
+                         "Writes audit_report.json + audit_report.md to output dir.")
+    ap.add_argument("--audit-deep", action="store_true",
+                    help="Also run Layer 3 AI verbatim check (slower + costs ~$1-3). "
+                         "Implies --audit.")
     args = ap.parse_args()
+    if args.audit_deep:
+        args.audit = True
 
     case_dir = Path(args.case_dir).resolve()
     source_dir = case_dir / "Source Files"
@@ -142,13 +155,16 @@ def main() -> int:
             extracted_txt_path.write_text(full_text)
             log.info("  → cached to %s", extracted_txt_path)
 
-        log.info("▶ Stage 2: MedSum-schema chronology via %s", args.model)
+        log.info("▶ Stage 2: MedSum-schema chronology (backend=%s, model=%s)",
+                 args.backend, args.model or "<default>")
         from pipeline.stage2_medsum_chronology import generate_medsum_chronology
         chronology_doc = generate_medsum_chronology(
             full_text=full_text,
             patient_info=patient_info,
             api_key=args.api_key or os.getenv("ANTHROPIC_API_KEY"),
+            backend=args.backend,
             model=args.model,
+            aws_region=args.aws_region,
         )
         # Persist for rerunnability / debugging
         chronology_path = out_dir / "chronology_doc.json"
@@ -176,14 +192,35 @@ def main() -> int:
 
     # ── Stage 5d: Hyperlinked Records PDF ──────────────────────────────────
     log.info("▶ Stage 5d: Hyperlinked Records PDF")
-    from pipeline.stage5_hyperlink import hyperlink_medical_records
-    hyperlink_res = hyperlink_medical_records(
-        chronology_path=str(output_paths["chronology"]),
-        records_path=str(output_paths["merged"]),
-        output_path=str(output_paths["hyperlinked"]),
-    )
-    log.info("  → %d total pages, %d links",
-             hyperlink_res.total_pages, hyperlink_res.link_count)
+    try:
+        from pipeline.stage5_hyperlink import hyperlink_medical_records
+        hyperlink_res = hyperlink_medical_records(
+            chronology_path=str(output_paths["chronology"]),
+            records_path=str(output_paths["merged"]),
+            output_path=str(output_paths["hyperlinked"]),
+        )
+        log.info("  → %d total pages, %d links",
+                 hyperlink_res.total_pages, hyperlink_res.link_count)
+    except Exception as exc:
+        log.warning("Stage 5d failed: %s — the other 3 files are still valid; "
+                    "rerun once LibreOffice is installed.", exc)
+
+    # ── Stage 4: Audit (optional) ──────────────────────────────────────────
+    if args.audit:
+        log.info("▶ Stage 4: Audit")
+        from pipeline.stage4_audit import audit_chronology
+        report = audit_chronology(
+            chronology_path=str(out_dir / "chronology_doc.json"),
+            records_path=str(output_paths["merged"]),
+            output_dir=str(out_dir),
+            deep=args.audit_deep,
+            backend=args.backend,
+            model=args.model,
+            api_key=args.api_key or os.getenv("ANTHROPIC_API_KEY"),
+            aws_region=args.aws_region,
+        )
+        log.info("  → audit score: %d/100 (critical=%d, warnings=%d)",
+                 report.score, report.critical_count, report.warning_count)
 
     # ── Summary ────────────────────────────────────────────────────────────
     print()

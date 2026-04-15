@@ -109,8 +109,14 @@ def _build_user_prompt(full_text: str, patient_info: dict,
 
 def _anthropic_call(client, *, model: str, system_prompt: str, user_prompt: str,
                     max_tokens: int, temperature: float,
-                    retry_label: str = "stage2-call") -> dict:
-    """Single non-chunked Anthropic call, streaming to avoid timeout.
+                    retry_label: str = "stage2-call",
+                    backend: str = "anthropic") -> dict:
+    """Single chronology call (Anthropic direct or AWS Bedrock), streamed.
+
+    Args:
+        client: either an `anthropic.Anthropic` client (backend="anthropic")
+            or a boto3 `bedrock-runtime` client (backend="bedrock").
+        backend: "anthropic" or "bedrock".
 
     If the response stops at `max_tokens` (truncated) OR JSON parsing fails,
     we retry up to 2 additional times, each time doubling the max_tokens
@@ -121,7 +127,7 @@ def _anthropic_call(client, *, model: str, system_prompt: str, user_prompt: str,
     # Enable extended output tokens (up to 64K) via the public beta header.
     extra_headers = {"anthropic-beta": "output-128k-2025-02-19"}
 
-    def _do_stream(token_budget: int):
+    def _do_stream_anthropic(token_budget: int):
         parts: List[str] = []
         with client.messages.stream(
             model=model,
@@ -135,6 +141,43 @@ def _anthropic_call(client, *, model: str, system_prompt: str, user_prompt: str,
                 parts.append(txt)
             final = stream.get_final_message()
         return "".join(parts), final.stop_reason
+
+    def _do_stream_bedrock(token_budget: int):
+        """Stream via AWS Bedrock's invoke_model_with_response_stream."""
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": token_budget,
+            "temperature": temperature,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
+        })
+        resp = client.invoke_model_with_response_stream(
+            modelId=model,
+            body=body,
+            contentType="application/json",
+            accept="application/json",
+        )
+        parts: List[str] = []
+        stop_reason = None
+        for event in resp.get("body", []):
+            chunk = event.get("chunk", {}).get("bytes")
+            if not chunk:
+                continue
+            payload = json.loads(chunk.decode("utf-8"))
+            ev_type = payload.get("type")
+            if ev_type == "content_block_delta":
+                delta = payload.get("delta", {})
+                if delta.get("type") == "text_delta":
+                    parts.append(delta.get("text", ""))
+            elif ev_type == "message_delta":
+                # Final stop_reason arrives here.
+                stop_reason = payload.get("delta", {}).get("stop_reason") or stop_reason
+            elif ev_type == "message_stop":
+                # no-op — terminal event
+                pass
+        return "".join(parts), stop_reason or "end_turn"
+
+    _do_stream = _do_stream_bedrock if backend == "bedrock" else _do_stream_anthropic
 
     effective_max = max_tokens
     for attempt in range(3):
@@ -312,10 +355,12 @@ def generate_medsum_chronology(
     patient_info: dict,
     api_key: Optional[str] = None,
     *,
-    model: str = "claude-sonnet-4-20250514",
-    max_tokens: int = 24000,          # ~4-6 min per chunk; auto-retries at 48K/64K on truncation
+    backend: str = "anthropic",        # "anthropic" (default) or "bedrock"
+    model: Optional[str] = None,       # overrides default per-backend
+    aws_region: str = "us-east-1",     # Bedrock region
+    max_tokens: int = 24000,           # auto-retries at 48K/64K on truncation
     temperature: float = 0.1,
-    chunk_size_chars: int = 180_000,  # ~45K tokens — dense chunks stay under 24K output
+    chunk_size_chars: int = 180_000,
     chunk_overlap_chars: int = 10_000,
     max_concurrent: int = 3,
 ) -> dict:
@@ -324,19 +369,37 @@ def generate_medsum_chronology(
     Automatically decides between single-call (small cases) and chunked merge
     (large cases). Returns a plain dict matching the ChronologyDoc schema.
     """
-    import anthropic
     from pipeline.chronology import _split_with_overlap
 
     system_prompt = read_prompt("medsum_chronology_system.txt")
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+
+    # Build client + pick default model per backend.
+    if backend == "bedrock":
+        import boto3
+        from botocore.config import Config
+        client = boto3.client(
+            "bedrock-runtime",
+            region_name=aws_region,
+            config=Config(read_timeout=600, connect_timeout=15, retries={"max_attempts": 3}),
+        )
+        # Claude Opus 4.6 via Bedrock (global cross-region inference profile).
+        # Override with --model if your region/profile differs.
+        effective_model = model or "global.anthropic.claude-opus-4-6-20251101-v1:0"
+    else:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+        effective_model = model or "claude-sonnet-4-20250514"
+
+    log.info("Stage 2 backend=%s model=%s", backend, effective_model)
 
     if len(full_text) <= chunk_size_chars:
         user_prompt = _build_user_prompt(full_text, patient_info,
                                           chunk_index=1, chunk_total=1)
         return _anthropic_call(
-            client, model=model, system_prompt=system_prompt,
+            client, model=effective_model, system_prompt=system_prompt,
             user_prompt=user_prompt, max_tokens=max_tokens,
             temperature=temperature,
+            backend=backend,
         )
 
     # Chunked mode
@@ -356,10 +419,11 @@ def generate_medsum_chronology(
                                      chunk_index=i, chunk_total=len(chunks))
         with sem:
             doc = _anthropic_call(
-                client, model=model, system_prompt=system_prompt,
+                client, model=effective_model, system_prompt=system_prompt,
                 user_prompt=prompt, max_tokens=max_tokens,
                 temperature=temperature,
                 retry_label=f"stage2-chunk-{i}",
+                backend=backend,
             )
         with lock:
             results[i] = doc
@@ -488,9 +552,17 @@ def main() -> int:
                    help="Contact first name for Delivery Note greeting")
     p.add_argument("--output", required=True,
                    help="Output ChronologyDoc JSON")
-    p.add_argument("--model", default="claude-sonnet-4-20250514")
+    p.add_argument("--backend", default="anthropic", choices=["anthropic", "bedrock"],
+                   help="Inference backend (default: anthropic)")
+    p.add_argument("--model", default=None,
+                   help="Model ID. Default: claude-sonnet-4-20250514 (anthropic) "
+                        "or global.anthropic.claude-opus-4-6-20251101-v1:0 (bedrock). "
+                        "Override if your AWS region uses a different inference profile.")
+    p.add_argument("--aws-region", default="us-east-1",
+                   help="AWS region for Bedrock (default us-east-1)")
     p.add_argument("--api-key", default=None,
-                   help="Anthropic API key (overrides ANTHROPIC_API_KEY env)")
+                   help="Anthropic API key (overrides ANTHROPIC_API_KEY env). "
+                        "Ignored when --backend=bedrock.")
     args = p.parse_args()
 
     with open(args.text) as f:
@@ -506,7 +578,9 @@ def main() -> int:
             "contact_first_name": args.contact,
         },
         api_key=args.api_key or os.getenv("ANTHROPIC_API_KEY"),
+        backend=args.backend,
         model=args.model,
+        aws_region=args.aws_region,
     )
     with open(args.output, "w") as f:
         json.dump(doc, f, indent=2)
