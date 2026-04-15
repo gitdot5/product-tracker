@@ -8,21 +8,31 @@ CRITICAL RULES
 
 3. Never fabricate. If a fact is not in the source, omit it. If a date is illegible, write "00/00/0000". If a handwritten note is unreadable, write "_____" with an "Illegible Notes" heading.
 
-4. ONE ENCOUNTER = ONE PATIENT VISIT. This is the single most important grouping rule. A "visit" means: one patient, one facility, one date (or consecutive dates of the same admission/procedure). When a patient gets multiple imaging studies, labs, or procedures on the same date at the same facility, they collapse into ONE encounter row with all findings grouped inside medical_events using bolded sub-headings. Examples:
+4. ONE ENCOUNTER = ONE PATIENT VISIT, OR ONE COURSE OF RECURRING CARE. This is the single most important grouping rule. Group aggressively. MedSum typically produces ~50-80 encounters for a ~2,000-page case — if your output has 200+, you are over-splitting.
 
-   ❌ WRONG — seven rows for one imaging visit:
-      [0] 02/27/2025 / Cypress Creek MRI / MRI Cervical Spine ... pdf_ref 614-617
-      [1] 02/27/2025 / Cypress Creek MRI / MRI Thoracic Spine ... pdf_ref 617-619
-      [2] 02/27/2025 / Cypress Creek MRI / MRI Lumbar Spine ... pdf_ref 619-622
-      ...
-   ✅ RIGHT — one row for the whole visit:
-      [0] 02/27/2025 / Cypress Creek MRI / medical_events:
-           "MRI Cervical Spine: {verbatim findings}
-            MRI Thoracic Spine: {verbatim findings}
-            MRI Lumbar Spine: {verbatim findings}"
-         pdf_ref: "614-622"
+   Rule 4a — Same-day, same-facility: collapse into ONE row. Multiple imaging studies, labs, injections, or procedures performed on the same date at the same facility = ONE encounter with all findings grouped inside medical_events using bolded sub-headings.
 
-   Same rule for chiropractic therapy sessions across consecutive dates (group into a date-range encounter), multiple injections done at the same visit, hospital admissions spanning multiple consecutive days, etc.
+      ❌ WRONG:
+         [0] 02/27/2025 / Cypress Creek MRI / MRI Cervical Spine ...
+         [1] 02/27/2025 / Cypress Creek MRI / MRI Thoracic Spine ...
+         [2] 02/27/2025 / Cypress Creek MRI / MRI Lumbar Spine ...
+      ✅ RIGHT:
+         [0] 02/27/2025 / Cypress Creek MRI / medical_events:
+              "MRI Cervical Spine: {findings}
+               MRI Thoracic Spine: {findings}
+               MRI Lumbar Spine: {findings}"
+
+   Rule 4b — Recurring therapy / chiropractic / physical therapy / psychotherapy / dialysis / any course of repeat visits to the SAME facility across consecutive or near-consecutive dates: collapse into ONE encounter with:
+      date = "MM/DD/YYYY-MM/DD/YYYY" (first to last)
+      medical_events opens with "From MM/DD/YYYY to MM/DD/YYYY, patient underwent N {therapy_type} sessions at {facility}." followed by a brief summary of the course, the initial evaluation findings, any MMI or final-visit statement, and any notable interim visits (pain scale changes, reassessments). Do NOT emit one row per visit.
+      pdf_ref = the full page range spanning all sessions
+
+      ❌ WRONG — 12 rows for 12 chiropractic visits
+      ✅ RIGHT — 1 row with date "03/10/2025-05/28/2025" and a summary + key milestones
+
+   Rule 4c — Multi-day hospital admission: ONE encounter spanning admission to discharge. medical_events summarizes admission reason, daily progress (grouped or major events only), discharge disposition. pdf_ref spans all admission pages.
+
+   Rule 4d — Follow-up visits to the SAME provider for the SAME ongoing complaint across multiple dates: if < 3 visits, keep as separate encounters. If 3+ visits to same provider for same issue, collapse into ONE date-range encounter as in Rule 4b.
 
 5. De-duplicate. If the same encounter appears in multiple source folders or gets referenced twice, include it once. Check: (date, facility) must be unique across encounters[] — if you're about to emit a second row with the same (date, facility), merge its content into the existing row instead.
 
