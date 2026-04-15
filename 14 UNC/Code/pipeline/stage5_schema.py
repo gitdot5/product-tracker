@@ -109,6 +109,34 @@ class DatedStatement:
 # ── Top-level container ────────────────────────────────────────────────────
 
 @dataclass
+class Provenance:
+    """Audit trail metadata stamped on every ChronologyDoc for legal reproducibility.
+
+    Populated by the Stage 2 generator. Consumed by Stage 4 audit + any
+    downstream review / sign-off tooling.
+    """
+    model: str = ""                             # e.g. "claude-sonnet-4-20250514"
+    backend: str = ""                           # "anthropic" | "bedrock"
+    prompt_version_hash: str = ""               # sha256 of medsum_chronology_system.txt at runtime
+    prompt_file: str = "medsum_chronology_system.txt"
+    generated_at: str = ""                      # ISO-8601 UTC timestamp
+    pipeline_commit: str = ""                   # git commit hash at run time (best-effort)
+    extraction_total_pages: int = 0             # pages PyMuPDF saw in merged PDF
+    extraction_chars: int = 0                   # chars emitted by Stage 1
+    ocr_pages_attempted: int = 0                # pages flagged as scanned
+    ocr_pages_recovered: int = 0                # pages Textract successfully OCR'd
+    ocr_pages_failed: int = 0                   # pages Textract rejected (non-fatal)
+    chunk_count: int = 0                        # how many chunks Stage 2 used
+    chunk_size_chars: int = 0
+    max_concurrent: int = 0
+
+    # Human review audit trail (filled post-generation, optional).
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[str] = None            # ISO-8601
+    audit_score_at_review: Optional[int] = None
+
+
+@dataclass
 class ChronologyDoc:
     """Full document model consumed by both Stage 5 producers."""
     patient: PatientInfo = field(default_factory=lambda: PatientInfo(name=""))
@@ -127,6 +155,9 @@ class ChronologyDoc:
     # Optional flag: if True, the Delivery Note will say
     # "There are no critical missing medical records."
     no_missing_records: bool = False
+
+    # Legal-reproducibility audit trail (populated by Stage 2).
+    provenance: Provenance = field(default_factory=Provenance)
 
 
 # ── dict <-> dataclass helpers (producers accept either) ───────────────────
@@ -162,6 +193,10 @@ def from_dict(d: Dict) -> ChronologyDoc:
             allergy=_hl(x.get("allergy", {})),
         )
 
+    prov_data = d.get("provenance") or {}
+    prov = Provenance(**{k: v for k, v in prov_data.items()
+                         if k in Provenance.__dataclass_fields__})
+
     return ChronologyDoc(
         patient=_patient(d.get("patient", {"name": ""})),
         general_instructions=list(d.get("general_instructions", [])),
@@ -180,4 +215,5 @@ def from_dict(d: Dict) -> ChronologyDoc:
                                           if k in MissingRecord.__dataclass_fields__})
                          for e in d.get("missing_records", [])],
         no_missing_records=bool(d.get("no_missing_records", False)),
+        provenance=prov,
     )

@@ -15,6 +15,7 @@ python3 run_medsum_pipeline.py \
     --doi "03/08/2022 and 02/11/2025" \
     --injury "MVA x2 (03/08/2022 and 02/11/2025); low back pain s/p lumbar caudal ESI 04/08/2025 and L3-S1 TLIF 04/29/2025; TBI with persistent symptoms s/p IN PRP" \
     --output-dir "AI Pipeline Output" \
+    --audit \
     2>&1 | tee -a "$LOG"
 
 RC=${PIPESTATUS[0]}

@@ -141,10 +141,15 @@ def main() -> int:
         with open(args.chronology_json) as f:
             chronology_doc = json.load(f)
     else:
+        extraction_stats_path = out_dir / "extraction_stats.json"
         if extracted_txt_path.exists() and extracted_txt_path.stat().st_size > 0:
             log.info("▶ Skipping Stage 1: reusing cached extracted_text.txt "
                      "(%d chars)", extracted_txt_path.stat().st_size)
             full_text = extracted_txt_path.read_text()
+            extraction_stats = {}
+            if extraction_stats_path.exists():
+                with open(extraction_stats_path) as f:
+                    extraction_stats = json.load(f)
         else:
             log.info("▶ Stage 1: Extracting text from merged records")
             from pipeline.extractor import extract_pdf_local, prepare_for_llm
@@ -152,7 +157,28 @@ def main() -> int:
             full_text = prepare_for_llm(extraction)
             log.info("  → %d chars from %d pages",
                      len(full_text), extraction.total_pages)
+            # ── OCR recall check ──
+            # Verify we got text from every merged-PDF page; flag silent drops.
+            import fitz
+            merged_doc = fitz.open(str(output_paths["merged"]))
+            merged_pg_count = len(merged_doc)
+            merged_doc.close()
+            if extraction.total_pages < merged_pg_count:
+                log.warning("OCR recall: extraction reported %d pages but "
+                            "merged PDF has %d pages — %d may have been "
+                            "silently dropped",
+                            extraction.total_pages, merged_pg_count,
+                            merged_pg_count - extraction.total_pages)
             extracted_txt_path.write_text(full_text)
+            extraction_stats = {
+                "total_pages": getattr(extraction, "total_pages", merged_pg_count),
+                "merged_pdf_pages": merged_pg_count,
+                "extraction_chars": len(full_text),
+                "ocr_pages_attempted": getattr(extraction, "ocr_attempted", 0),
+                "ocr_pages_recovered": getattr(extraction, "ocr_recovered", 0),
+                "ocr_pages_failed":    getattr(extraction, "ocr_failed", 0),
+            }
+            extraction_stats_path.write_text(json.dumps(extraction_stats, indent=2))
             log.info("  → cached to %s", extracted_txt_path)
 
         log.info("▶ Stage 2: MedSum-schema chronology (backend=%s, model=%s)",
@@ -166,6 +192,15 @@ def main() -> int:
             model=args.model,
             aws_region=args.aws_region,
         )
+        # Fold extraction OCR stats into provenance so the full chain is auditable.
+        if extraction_stats:
+            chronology_doc.setdefault("provenance", {}).update({
+                "extraction_total_pages": extraction_stats.get("total_pages", 0),
+                "merged_pdf_pages":       extraction_stats.get("merged_pdf_pages", 0),
+                "ocr_pages_attempted":    extraction_stats.get("ocr_pages_attempted", 0),
+                "ocr_pages_recovered":    extraction_stats.get("ocr_pages_recovered", 0),
+                "ocr_pages_failed":       extraction_stats.get("ocr_pages_failed", 0),
+            })
         # Persist for rerunnability / debugging
         chronology_path = out_dir / "chronology_doc.json"
         with open(chronology_path, "w") as f:

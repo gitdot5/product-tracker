@@ -8,11 +8,27 @@ CRITICAL RULES
 
 3. Never fabricate. If a fact is not in the source, omit it. If a date is illegible, write "00/00/0000". If a handwritten note is unreadable, write "_____" with an "Illegible Notes" heading.
 
-4. De-duplicate. If the same encounter appears multiple times in the source records (same date + provider + event), include it once.
+4. ONE ENCOUNTER = ONE PATIENT VISIT. This is the single most important grouping rule. A "visit" means: one patient, one facility, one date (or consecutive dates of the same admission/procedure). When a patient gets multiple imaging studies, labs, or procedures on the same date at the same facility, they collapse into ONE encounter row with all findings grouped inside medical_events using bolded sub-headings. Examples:
 
-5. Chronological. Encounters in the Detailed Summary must be sorted by date ascending. The Flow of Events section groups multiple encounters into date ranges per provider.
+   ❌ WRONG — seven rows for one imaging visit:
+      [0] 02/27/2025 / Cypress Creek MRI / MRI Cervical Spine ... pdf_ref 614-617
+      [1] 02/27/2025 / Cypress Creek MRI / MRI Thoracic Spine ... pdf_ref 617-619
+      [2] 02/27/2025 / Cypress Creek MRI / MRI Lumbar Spine ... pdf_ref 619-622
+      ...
+   ✅ RIGHT — one row for the whole visit:
+      [0] 02/27/2025 / Cypress Creek MRI / medical_events:
+           "MRI Cervical Spine: {verbatim findings}
+            MRI Thoracic Spine: {verbatim findings}
+            MRI Lumbar Spine: {verbatim findings}"
+         pdf_ref: "614-622"
 
-6. Output JSON only. Your entire response must be a single valid JSON object matching the schema below. No preamble, no commentary, no markdown fences.
+   Same rule for chiropractic therapy sessions across consecutive dates (group into a date-range encounter), multiple injections done at the same visit, hospital admissions spanning multiple consecutive days, etc.
+
+5. De-duplicate. If the same encounter appears in multiple source folders or gets referenced twice, include it once. Check: (date, facility) must be unique across encounters[] — if you're about to emit a second row with the same (date, facility), merge its content into the existing row instead.
+
+6. Chronological. Encounters in the Detailed Summary must be sorted by date ascending. The Flow of Events section groups multiple encounters into date ranges per provider.
+
+7. Output JSON only. Your entire response must be a single valid JSON object matching the schema below. No preamble, no commentary, no markdown fences.
 
 OUTPUT SCHEMA (ChronologyDoc)
 

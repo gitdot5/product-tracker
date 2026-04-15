@@ -26,9 +26,12 @@ delivery_note,chronology_docx}`.
 
 from __future__ import annotations
 
+import datetime
+import hashlib
 import json
 import logging
 import os
+import subprocess
 from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -303,9 +306,43 @@ def _merge_chronology_docs(docs: List[dict], patient_info: dict) -> dict:
                     "pdf_ref": new.get("pdf_ref"),
                 }
 
-        # Encounters — concatenate
+        # Encounters — union by (date, facility); merge medical_events on collision.
+        # This implements the "ONE ENCOUNTER = ONE VISIT" guarantee at the
+        # merge layer (belt + suspenders to the prompt-level instruction).
         for enc in d.get("encounters", []) or []:
-            merged["encounters"].append(enc)
+            key = ((enc.get("date") or "").strip().lower(),
+                   (enc.get("facility") or "").strip().lower())
+            # Skip entries with no grouping key at all (always append)
+            if key == ("", ""):
+                merged["encounters"].append(enc)
+                continue
+            # Look for existing match
+            existing_idx = None
+            for i, prev in enumerate(merged["encounters"]):
+                prev_key = ((prev.get("date") or "").strip().lower(),
+                            (prev.get("facility") or "").strip().lower())
+                if prev_key == key:
+                    existing_idx = i
+                    break
+            if existing_idx is None:
+                merged["encounters"].append(enc)
+            else:
+                # Merge medical_events + widen pdf_ref; prefer non-empty providers.
+                prev = merged["encounters"][existing_idx]
+                prev_body = prev.get("medical_events", "") or ""
+                new_body = enc.get("medical_events", "") or ""
+                if new_body and new_body not in prev_body:
+                    prev["medical_events"] = (prev_body + "\n" + new_body).strip() \
+                        if prev_body else new_body
+                # Union pdf_refs (string comma list)
+                prev_ref = (prev.get("pdf_ref") or "").strip()
+                new_ref = (enc.get("pdf_ref") or "").strip()
+                if new_ref and new_ref not in prev_ref:
+                    prev["pdf_ref"] = (prev_ref + ", " + new_ref).strip(", ") \
+                        if prev_ref else new_ref
+                # Prefer longer providers list
+                if len(enc.get("providers") or []) > len(prev.get("providers") or []):
+                    prev["providers"] = enc.get("providers") or []
 
         # Case focus — take the longest version
         cf = d.get("case_focus", "") or ""
@@ -372,6 +409,17 @@ def generate_medsum_chronology(
     from pipeline.chronology import _split_with_overlap
 
     system_prompt = read_prompt("medsum_chronology_system.txt")
+    prompt_hash = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
+
+    # Best-effort: capture current git commit for reproducibility.
+    try:
+        git_commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=Path(__file__).resolve().parent.parent,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        git_commit = ""
 
     # Build client + pick default model per backend.
     if backend == "bedrock":
@@ -392,15 +440,33 @@ def generate_medsum_chronology(
 
     log.info("Stage 2 backend=%s model=%s", backend, effective_model)
 
+    def _stamp_provenance(doc: dict, chunk_count: int) -> dict:
+        """Attach audit-trail metadata to the final ChronologyDoc."""
+        doc.setdefault("provenance", {})
+        doc["provenance"].update({
+            "model": effective_model,
+            "backend": backend,
+            "prompt_version_hash": prompt_hash,
+            "prompt_file": "medsum_chronology_system.txt",
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "pipeline_commit": git_commit,
+            "extraction_chars": len(full_text),
+            "chunk_count": chunk_count,
+            "chunk_size_chars": chunk_size_chars,
+            "max_concurrent": max_concurrent,
+        })
+        return doc
+
     if len(full_text) <= chunk_size_chars:
         user_prompt = _build_user_prompt(full_text, patient_info,
                                           chunk_index=1, chunk_total=1)
-        return _anthropic_call(
+        doc = _anthropic_call(
             client, model=effective_model, system_prompt=system_prompt,
             user_prompt=user_prompt, max_tokens=max_tokens,
             temperature=temperature,
             backend=backend,
         )
+        return _stamp_provenance(doc, chunk_count=1)
 
     # Chunked mode
     chunks = _split_with_overlap(full_text, chunk_size_chars, chunk_overlap_chars)
@@ -437,7 +503,8 @@ def generate_medsum_chronology(
             fut.result()  # propagate exceptions
 
     ordered = [results[i] for i in sorted(results)]
-    return _merge_chronology_docs(ordered, patient_info)
+    merged = _merge_chronology_docs(ordered, patient_info)
+    return _stamp_provenance(merged, chunk_count=len(chunks))
 
 
 # ── Transformer: existing pipeline chronology → ChronologyDoc ──────────────
