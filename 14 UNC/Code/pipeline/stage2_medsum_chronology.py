@@ -220,6 +220,22 @@ def _parse_json(raw: str) -> dict:
 
 # ── Chunked merge logic ────────────────────────────────────────────────────
 
+def _safe_dict(x) -> dict:
+    """Coerce x to a dict; None/non-dict → empty dict. Belt-and-suspenders
+    guard for the case where Claude emits `"patient_history": null` or a
+    chunk's JSON is malformed in a subtle way."""
+    if isinstance(x, dict):
+        return x
+    return {}
+
+
+def _safe_list(x) -> list:
+    """Coerce x to a list; None/non-list → empty list."""
+    if isinstance(x, list):
+        return x
+    return []
+
+
 def _merge_chronology_docs(docs: List[dict], patient_info: dict) -> dict:
     """Merge N partial ChronologyDocs (one per text chunk) into one.
 
@@ -228,11 +244,15 @@ def _merge_chronology_docs(docs: List[dict], patient_info: dict) -> dict:
     - injury_report: union of diagnoses / treatments, take description from first
     - flow_of_events: concatenate in chunk order
     - patient_history: take the most-populated version of each of the 5 lines
-    - encounters: concatenate, then sort by `date` ascending
+    - encounters: UNION by (date, facility), merge medical_events on collision
     - causation/disability: concatenate
     - missing_records: concatenate (dedupe by pdf_reference)
     - no_missing_records: AND of all chunks
+
+    Defensive: any None / non-dict / non-list input is coerced to empty.
     """
+    # Drop None chunks (e.g. if a worker failed silently)
+    docs = [d for d in docs if isinstance(d, dict)]
     if not docs:
         return {}
     if len(docs) == 1:
@@ -267,36 +287,38 @@ def _merge_chronology_docs(docs: List[dict], patient_info: dict) -> dict:
 
     for i, d in enumerate(docs):
         # General instructions: take from first non-empty chunk
-        if not merged["general_instructions"] and d.get("general_instructions"):
-            merged["general_instructions"] = d["general_instructions"]
+        gi = _safe_list(d.get("general_instructions"))
+        if not merged["general_instructions"] and gi:
+            merged["general_instructions"] = gi
 
         # Injury report — union of lists; take first non-empty scalars
-        ir = d.get("injury_report", {})
+        ir = _safe_dict(d.get("injury_report"))
         if ir:
             mir = merged["injury_report"]
             for key in ("prior_injury_details", "dates_of_injury", "diagnoses"):
-                for item in ir.get(key, []) or []:
+                for item in _safe_list(ir.get(key)):
                     if item and item not in mir[key]:
                         mir[key].append(item)
             if not mir["incident_type"]:
                 mir["incident_type"] = ir.get("incident_type", "") or ""
             if not mir["description"]:
                 mir["description"] = ir.get("description", "") or ""
-            tr = ir.get("treatments", {}) or {}
+            tr = _safe_dict(ir.get("treatments"))
             for key in ("medications", "procedures", "therapy", "imaging", "labs"):
-                for item in tr.get(key, []) or []:
+                for item in _safe_list(tr.get(key)):
                     if item and item not in mir["treatments"][key]:
                         mir["treatments"][key].append(item)
 
         # Flow of events — concatenate preserving order
-        for entry in d.get("flow_of_events", []) or []:
-            merged["flow_of_events"].append(entry)
+        for entry in _safe_list(d.get("flow_of_events")):
+            if isinstance(entry, dict):
+                merged["flow_of_events"].append(entry)
 
         # Patient history — prefer the longest text per line
-        ph = d.get("patient_history", {}) or {}
+        ph = _safe_dict(d.get("patient_history"))
         for key in ("past_medical", "surgical", "family", "social", "allergy"):
-            cur = merged["patient_history"][key]
-            new = ph.get(key, {}) or {}
+            cur = _safe_dict(merged["patient_history"].get(key))
+            new = _safe_dict(ph.get(key))
             new_text = (new.get("text") or "").strip()
             cur_text = (cur.get("text") or "").strip()
             if new_text and (cur_text in ("", "Not available.")
@@ -309,7 +331,9 @@ def _merge_chronology_docs(docs: List[dict], patient_info: dict) -> dict:
         # Encounters — union by (date, facility); merge medical_events on collision.
         # This implements the "ONE ENCOUNTER = ONE VISIT" guarantee at the
         # merge layer (belt + suspenders to the prompt-level instruction).
-        for enc in d.get("encounters", []) or []:
+        for enc in _safe_list(d.get("encounters")):
+            if not isinstance(enc, dict):
+                continue
             key = ((enc.get("date") or "").strip().lower(),
                    (enc.get("facility") or "").strip().lower())
             # Skip entries with no grouping key at all (always append)
@@ -345,20 +369,23 @@ def _merge_chronology_docs(docs: List[dict], patient_info: dict) -> dict:
                     prev["providers"] = enc.get("providers") or []
 
         # Case focus — take the longest version
-        cf = d.get("case_focus", "") or ""
+        cf = d.get("case_focus") or ""
         if cf and len(cf) > len(merged["case_focus"]):
             merged["case_focus"] = cf
 
         # Causation / disability / missing records
-        for enc in d.get("causation_statements", []) or []:
-            if enc not in merged["causation_statements"]:
+        for enc in _safe_list(d.get("causation_statements")):
+            if isinstance(enc, dict) and enc not in merged["causation_statements"]:
                 merged["causation_statements"].append(enc)
-        for enc in d.get("disability_statements", []) or []:
-            if enc not in merged["disability_statements"]:
+        for enc in _safe_list(d.get("disability_statements")):
+            if isinstance(enc, dict) and enc not in merged["disability_statements"]:
                 merged["disability_statements"].append(enc)
 
-        existing_refs = {m.get("pdf_reference") for m in merged["missing_records"]}
-        for mr in d.get("missing_records", []) or []:
+        existing_refs = {(m.get("pdf_reference") if isinstance(m, dict) else None)
+                         for m in merged["missing_records"]}
+        for mr in _safe_list(d.get("missing_records")):
+            if not isinstance(mr, dict):
+                continue
             if mr.get("pdf_reference") not in existing_refs:
                 merged["missing_records"].append(mr)
                 existing_refs.add(mr.get("pdf_reference"))
@@ -400,6 +427,7 @@ def generate_medsum_chronology(
     chunk_size_chars: int = 180_000,
     chunk_overlap_chars: int = 10_000,
     max_concurrent: int = 3,
+    chunk_checkpoint_dir: Optional[str] = None,  # save each chunk's JSON as it finishes
 ) -> dict:
     """Produce a ChronologyDoc dict from extracted medical record text.
 
@@ -480,7 +508,27 @@ def generate_medsum_chronology(
     results: Dict[int, dict] = {}
     lock = threading.Lock()
 
+    checkpoint_dir = Path(chunk_checkpoint_dir) if chunk_checkpoint_dir else None
+    if checkpoint_dir:
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     def _process(i, chunk):
+        # If a checkpoint for this chunk already exists, reuse it.
+        if checkpoint_dir is not None:
+            ckpt = checkpoint_dir / f"chunk_{i:03d}.json"
+            if ckpt.exists() and ckpt.stat().st_size > 0:
+                try:
+                    with open(ckpt) as f:
+                        cached = json.load(f)
+                    with lock:
+                        results[i] = cached
+                    encs = len(cached.get("encounters", []) or []) if isinstance(cached, dict) else 0
+                    log.info("  chunk %d/%d reused from checkpoint (%d encounters)",
+                             i, len(chunks), encs)
+                    return i, cached
+                except Exception as e:
+                    log.warning("Chunk %d checkpoint unreadable (%s) — re-running", i, e)
+
         prompt = _build_user_prompt(chunk, patient_info,
                                      chunk_index=i, chunk_total=len(chunks))
         with sem:
@@ -491,10 +539,20 @@ def generate_medsum_chronology(
                 retry_label=f"stage2-chunk-{i}",
                 backend=backend,
             )
+        # Persist this chunk's output to disk AS SOON AS IT'S DONE so a later
+        # crash can't lose it. Survives merge failure, network glitch, SIGKILL.
+        if checkpoint_dir is not None:
+            try:
+                ckpt = checkpoint_dir / f"chunk_{i:03d}.json"
+                with open(ckpt, "w") as f:
+                    json.dump(doc, f, indent=2, default=str)
+            except Exception as e:
+                log.warning("Failed to checkpoint chunk %d: %s", i, e)
+
         with lock:
             results[i] = doc
-        log.info("  chunk %d/%d done (%d encounters)",
-                 i, len(chunks), len(doc.get("encounters", [])))
+        encs = len(doc.get("encounters", []) or []) if isinstance(doc, dict) else 0
+        log.info("  chunk %d/%d done (%d encounters)", i, len(chunks), encs)
         return i, doc
 
     with ThreadPoolExecutor(max_workers=max_concurrent) as pool:

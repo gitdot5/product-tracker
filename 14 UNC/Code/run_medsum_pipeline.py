@@ -184,6 +184,9 @@ def main() -> int:
         log.info("▶ Stage 2: MedSum-schema chronology (backend=%s, model=%s)",
                  args.backend, args.model or "<default>")
         from pipeline.stage2_medsum_chronology import generate_medsum_chronology
+        # Checkpoint each chunk to disk as it lands — guarantees no API $ lost
+        # to a later merge/save crash.
+        chunk_ckpt_dir = out_dir / "chunks"
         chronology_doc = generate_medsum_chronology(
             full_text=full_text,
             patient_info=patient_info,
@@ -191,6 +194,7 @@ def main() -> int:
             backend=args.backend,
             model=args.model,
             aws_region=args.aws_region,
+            chunk_checkpoint_dir=str(chunk_ckpt_dir),
         )
         # Fold extraction OCR stats into provenance so the full chain is auditable.
         if extraction_stats:
