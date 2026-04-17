@@ -48,9 +48,9 @@ log = logging.getLogger(__name__)
 # ── Styling ────────────────────────────────────────────────────────────────
 
 BODY_FONT = "Times New Roman"
-BODY_SIZE = Pt(11)
-TITLE_SIZE = Pt(14)
-SECTION_SIZE = Pt(12)
+BODY_SIZE = Pt(9.5)
+TITLE_SIZE = Pt(12)
+SECTION_SIZE = Pt(10.5)
 
 RED = RGBColor(0xC0, 0x00, 0x00)        # reviewer comments
 YELLOW_HIGHLIGHT = "FFFF00"              # case-significant details
@@ -138,11 +138,13 @@ def _para(doc, text: str = "", *, bold=False, italic=False,
 
 
 def _cell_text(cell, text: str, *, bold=False, italic=False,
-               color=None) -> None:
+               color=None, size=None) -> None:
     cell.text = ""  # clear default empty paragraph
     p = cell.paragraphs[0]
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(1)
     run = p.add_run(text)
-    _format_run(run, bold=bold, italic=italic, color=color)
+    _format_run(run, bold=bold, italic=italic, color=color, size=size or BODY_SIZE)
 
 
 def _cell_bullets(cell, items, *, italic=False) -> None:
@@ -155,6 +157,8 @@ def _cell_bullets(cell, items, *, italic=False) -> None:
             first = False
         else:
             p = cell.add_paragraph()
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(1)
         run = p.add_run(f"\u2022 {item}")
         _format_run(run, italic=italic)
 
@@ -328,9 +332,9 @@ def _write_detailed_summary(doc, d: ChronologyDoc) -> None:
         _cell_text(hdr[i], h, bold=True)
         _set_cell_shading(hdr[i], HEADER_SHADE)
 
-    # Widen MEDICAL EVENTS column (rough sizing)
+    # Column sizing — compact to fit narrower margins
     try:
-        widths = [Cm(2.5), Cm(4.0), Cm(11.0), Cm(2.5)]
+        widths = [Cm(2.2), Cm(3.5), Cm(12.0), Cm(2.0)]
         for i, w in enumerate(widths):
             for row in table.columns[i].cells:
                 row.width = w
@@ -388,6 +392,8 @@ def _render_medical_events(cell, text: str) -> None:
             first = False
         else:
             p = cell.add_paragraph()
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(1)
         # Detect "Heading: body"
         if ":" in line:
             head, body = line.split(":", 1)
@@ -417,9 +423,17 @@ def build_chronology(spec: Union[ChronologyDoc, dict],
     output_path = Path(output_path)
 
     doc = Document()
+    # Compact margins (MedSum uses narrow margins)
+    for section in doc.sections:
+        section.top_margin = Cm(1.27)
+        section.bottom_margin = Cm(1.27)
+        section.left_margin = Cm(1.27)
+        section.right_margin = Cm(1.27)
     style = doc.styles["Normal"]
     style.font.name = BODY_FONT
     style.font.size = BODY_SIZE
+    style.paragraph_format.space_before = Pt(0)
+    style.paragraph_format.space_after = Pt(2)
 
     _write_title(doc)
     _write_usage_guidelines(doc)

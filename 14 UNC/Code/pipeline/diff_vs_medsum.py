@@ -64,14 +64,52 @@ def _jaccard(a: Set, b: Set) -> float:
 
 
 def _doc_to_text(path: Path, workdir: Path) -> str:
-    """.doc/.docx → plain text via LibreOffice headless."""
-    subprocess.run(
-        ["libreoffice", "--headless", "--convert-to", "txt",
-         str(path), "--outdir", str(workdir)],
-        check=True, capture_output=True,
-    )
-    out = workdir / (path.stem + ".txt")
-    return out.read_text() if out.exists() else ""
+    """.doc / .docx → plain text.
+
+    Tries, in order:
+      1. python-docx for .docx (fastest, pure Python)
+      2. macOS `textutil -convert txt` (fast, handles both .doc and .docx)
+      3. `libreoffice --headless` as last resort (slow: 3-10 min)
+    """
+    # Path 1: python-docx for .docx
+    if path.suffix.lower() == ".docx":
+        try:
+            import docx as _docx
+            d = _docx.Document(str(path))
+            parts = [para.text for para in d.paragraphs]
+            for table in d.tables:
+                for row in table.rows:
+                    parts.append("\t".join(cell.text for cell in row.cells))
+            return "\n".join(parts)
+        except Exception as e:
+            log.debug("python-docx failed on %s: %s", path.name, e)
+
+    # Path 2: textutil (macOS native, fast)
+    out_txt = workdir / (path.stem + ".txt")
+    try:
+        subprocess.run(
+            ["textutil", "-convert", "txt", "-output", str(out_txt), str(path)],
+            check=True, capture_output=True, timeout=30,
+        )
+        if out_txt.exists():
+            return out_txt.read_text(errors="replace")
+    except (FileNotFoundError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired) as e:
+        log.debug("textutil failed on %s: %s", path.name, e)
+
+    # Path 3: LibreOffice fallback
+    try:
+        subprocess.run(
+            ["libreoffice", "--headless", "--convert-to", "txt",
+             str(path), "--outdir", str(workdir)],
+            check=True, capture_output=True, timeout=120,
+        )
+        lo_out = workdir / (path.stem + ".txt")
+        if lo_out.exists():
+            return lo_out.read_text(errors="replace")
+    except Exception as e:
+        log.warning("All conversion paths failed for %s: %s", path, e)
+    return ""
 
 
 def _find_file(dir_path: Path, *keywords: str) -> Optional[Path]:
@@ -151,6 +189,10 @@ def _diff_merged(ours: Path, medsum: Path) -> MergedDiff:
     d = MergedDiff()
     if not ours.exists() or not medsum.exists():
         return d
+    if ours.stat().st_size == 0 or medsum.stat().st_size == 0:
+        log.warning("Skip merged diff: empty file (ours=%d, medsum=%d)",
+                    ours.stat().st_size, medsum.stat().st_size)
+        return d
     od = fitz.open(ours)
     md = fitz.open(medsum)
     d.ours_pages, d.medsum_pages = len(od), len(md)
@@ -174,6 +216,10 @@ def _diff_merged(ours: Path, medsum: Path) -> MergedDiff:
 def _diff_hyperlink(ours: Path, medsum: Path) -> HyperlinkDiff:
     d = HyperlinkDiff()
     if not ours.exists() or not medsum.exists():
+        return d
+    if ours.stat().st_size == 0 or medsum.stat().st_size == 0:
+        log.warning("Skip hyperlink diff: empty file (ours=%d, medsum=%d)",
+                    ours.stat().st_size, medsum.stat().st_size)
         return d
     od = fitz.open(ours)
     md = fitz.open(medsum)
@@ -223,10 +269,28 @@ def _diff_chronology(ours: Path, medsum: Path, workdir: Path) -> ChronologyDiff:
 
     d.char_length_ratio = len(ours_txt) / max(len(medsum_txt), 1)
 
-    # Crude encounter count estimate: lines that start with MM/DD/YYYY date
-    date_line_re = re.compile(r"^\s*(\d{1,2}/\d{1,2}/\d{4})", re.MULTILINE)
-    d.ours_encounters_estimated = len(date_line_re.findall(ours_txt))
-    d.medsum_encounters_estimated = len(date_line_re.findall(medsum_txt))
+    # Encounter count estimate.
+    #
+    # OLD: regex r"^\s*(\d{1,2}/\d{1,2}/\d{4})" counted EVERY line starting with
+    #      a date — including dates embedded in prose ("On 2/15/2024 the pt...").
+    #      This inflated Hatcher to 183 when the actual table rows are ~54-67.
+    # NEW: count lines where the date stands ALONE in a cell (textutil flattens
+    #      tables to one-line-per-cell, so a table-row DATE cell becomes a line
+    #      containing just the date with optional whitespace, not followed by
+    #      prose). Fall back to the old count if no standalone dates are found.
+    standalone_re = re.compile(r"^\s*(\d{1,2}/\d{1,2}/\d{4})\s*$", re.MULTILINE)
+    datestart_re = re.compile(r"^\s*(\d{1,2}/\d{1,2}/\d{4})", re.MULTILINE)
+
+    ours_row = len(standalone_re.findall(ours_txt))
+    medsum_row = len(standalone_re.findall(medsum_txt))
+    # Heuristic: if standalone count is abnormally low (<30% of date-start count)
+    # the DOCX may not preserve cell boundaries as separate lines — fall back.
+    if ours_row < 0.3 * len(datestart_re.findall(ours_txt)):
+        ours_row = len(datestart_re.findall(ours_txt))
+    if medsum_row < 0.3 * len(datestart_re.findall(medsum_txt)):
+        medsum_row = len(datestart_re.findall(medsum_txt))
+    d.ours_encounters_estimated = ours_row
+    d.medsum_encounters_estimated = medsum_row
 
     # Diagnosis token recall — pull out text after "Injuries/ Diagnoses" until
     # the next section header (heuristic).

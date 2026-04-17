@@ -83,6 +83,10 @@ def main() -> int:
     ap.add_argument("--audit-deep", action="store_true",
                     help="Also run Layer 3 AI verbatim check (slower + costs ~$1-3). "
                          "Implies --audit.")
+    ap.add_argument("--skip-facility-merge", action="store_true",
+                    help="Skip Stage 2b facility-normalized encounter merge. "
+                         "Default: ON (collapses 'The X' / 'X', 'St.' / 'Saint', "
+                         "'(HCA)' qualifiers, etc.)")
     args = ap.parse_args()
     if args.audit_deep:
         args.audit = True
@@ -211,6 +215,23 @@ def main() -> int:
             json.dump(chronology_doc, f, indent=2)
         log.info("  → %d encounters, cached to %s",
                  len(chronology_doc.get("encounters", [])), chronology_path)
+
+        # ── Stage 2b: Facility-normalized encounter merge ──────────────────
+        # Collapses near-duplicates like "The X Institute" / "X Institute",
+        # "OneStop" / "One Stop", "St." / "Saint", "(HCA)" qualifiers, etc.
+        # See pipeline/encounter_merger.py for the normalization rules.
+        if not args.skip_facility_merge:
+            log.info("▶ Stage 2b: Facility normalization + merge")
+            from pipeline.encounter_merger import merge_encounters
+            before_ct = len(chronology_doc.get("encounters", []))
+            chronology_doc = merge_encounters(chronology_doc, fuzzy=True)
+            after_ct = len(chronology_doc.get("encounters", []))
+            n_clusters = len(chronology_doc.get("provenance", {})
+                             .get("facility_merger_clusters", []))
+            log.info("  → %d → %d encounters (%d collapsed, %d multi-variant clusters)",
+                     before_ct, after_ct, before_ct - after_ct, n_clusters)
+            with open(chronology_path, "w") as f:
+                json.dump(chronology_doc, f, indent=2)
 
     # Ensure patient metadata is set (AI may have partial info)
     chronology_doc.setdefault("patient", {})

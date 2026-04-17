@@ -424,8 +424,8 @@ def generate_medsum_chronology(
     aws_region: str = "us-east-1",     # Bedrock region
     max_tokens: int = 24000,           # auto-retries at 48K/64K on truncation
     temperature: float = 0.1,
-    chunk_size_chars: int = 180_000,
-    chunk_overlap_chars: int = 10_000,
+    chunk_size_chars: int = 120_000,
+    chunk_overlap_chars: int = 8_000,
     max_concurrent: int = 3,
     chunk_checkpoint_dir: Optional[str] = None,  # save each chunk's JSON as it finishes
 ) -> dict:
